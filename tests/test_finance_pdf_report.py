@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timedelta
-from claudetest.pdf_report.finance_pdf_report import compute_indicators, plot_price_chart, load_market_data_from_yahoo
+from claudetest.pdf_report.finance_pdf_report import compute_indicators, plot_price_chart, load_market_data_from_yahoo, generate_finance_report
 
 
 class TestComputeIndicators:
@@ -553,3 +553,241 @@ class TestLoadMarketDataFromYahoo:
             indicators_data['Close'], 
             check_names=False
         )
+
+
+class TestGenerateFinanceReport:
+    """Test suite for the generate_finance_report function."""
+    
+    @pytest.fixture
+    def mock_yahoo_data(self):
+        """Create mock Yahoo Finance data."""
+        dates = pd.date_range('2023-01-01', periods=100, freq='D')
+        prices = np.random.uniform(90, 110, len(dates))
+        
+        mock_hist = pd.DataFrame({
+            'Open': prices,
+            'High': prices * 1.02,
+            'Low': prices * 0.98,
+            'Close': prices,
+            'Volume': np.random.randint(1000000, 10000000, len(dates))
+        }, index=dates)
+        mock_hist.index.name = 'Date'
+        
+        return mock_hist
+    
+    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
+    @patch('builtins.print')  # Mock print to avoid console output during tests
+    def test_generate_finance_report_single_ticker_success(self, mock_print, mock_ticker, mock_yahoo_data):
+        """Test successful report generation for a single ticker."""
+        # Setup mock
+        mock_ticker_instance = MagicMock()
+        mock_ticker_instance.history.return_value = mock_yahoo_data
+        mock_ticker.return_value = mock_ticker_instance
+        
+        # Test function
+        result = generate_finance_report(['AAPL'])
+        
+        # Verify result structure
+        assert isinstance(result, dict)
+        assert 'AAPL' in result
+        assert 'data' in result['AAPL']
+        assert 'chart' in result['AAPL']
+        
+        # Verify data structure
+        data = result['AAPL']['data']
+        assert isinstance(data, pd.DataFrame)
+        assert 'Close' in data.columns
+        assert 'SMA_20' in data.columns
+        
+        # Verify chart
+        chart = result['AAPL']['chart']
+        assert isinstance(chart, plt.Figure)
+        
+        # Clean up
+        plt.close(chart)
+    
+    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
+    @patch('builtins.print')
+    def test_generate_finance_report_multiple_tickers_success(self, mock_print, mock_ticker, mock_yahoo_data):
+        """Test successful report generation for multiple tickers."""
+        # Setup mock
+        mock_ticker_instance = MagicMock()
+        mock_ticker_instance.history.return_value = mock_yahoo_data
+        mock_ticker.return_value = mock_ticker_instance
+        
+        tickers = ['AAPL', 'MSFT', 'GOOGL']
+        
+        # Test function
+        result = generate_finance_report(tickers)
+        
+        # Verify all tickers were processed
+        assert len(result) == 3
+        for ticker in tickers:
+            assert ticker in result
+            assert 'data' in result[ticker]
+            assert 'chart' in result[ticker]
+            
+            # Clean up charts
+            plt.close(result[ticker]['chart'])
+    
+    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
+    @patch('builtins.print')
+    def test_generate_finance_report_mixed_success_failure(self, mock_print, mock_ticker, mock_yahoo_data):
+        """Test report generation with some successful and some failed tickers."""
+        # Setup mock to succeed for AAPL but fail for INVALID
+        def mock_ticker_side_effect(ticker):
+            mock_instance = MagicMock()
+            if ticker == 'AAPL':
+                mock_instance.history.return_value = mock_yahoo_data
+            else:
+                mock_instance.history.return_value = pd.DataFrame()  # Empty response
+            return mock_instance
+        
+        mock_ticker.side_effect = mock_ticker_side_effect
+        
+        # Test function
+        result = generate_finance_report(['AAPL', 'INVALID'])
+        
+        # Verify only successful ticker is in result
+        assert len(result) == 1
+        assert 'AAPL' in result
+        assert 'INVALID' not in result
+        
+        # Clean up
+        plt.close(result['AAPL']['chart'])
+    
+    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
+    @patch('builtins.print')
+    def test_generate_finance_report_all_tickers_fail(self, mock_print, mock_ticker):
+        """Test report generation when all tickers fail."""
+        # Setup mock to always return empty DataFrame
+        mock_ticker_instance = MagicMock()
+        mock_ticker_instance.history.return_value = pd.DataFrame()
+        mock_ticker.return_value = mock_ticker_instance
+        
+        # Test function should raise ValueError
+        with pytest.raises(ValueError) as exc_info:
+            generate_finance_report(['INVALID1', 'INVALID2'])
+        
+        assert "Failed to process any tickers" in str(exc_info.value)
+    
+    def test_generate_finance_report_empty_ticker_list(self):
+        """Test report generation with empty ticker list."""
+        with pytest.raises(ValueError) as exc_info:
+            generate_finance_report([])
+        
+        assert "tickers must be a non-empty list" in str(exc_info.value)
+    
+    def test_generate_finance_report_invalid_input_type(self):
+        """Test report generation with invalid input types."""
+        # Test with string instead of list
+        with pytest.raises(ValueError) as exc_info:
+            generate_finance_report("AAPL")
+        
+        assert "tickers must be a non-empty list" in str(exc_info.value)
+        
+        # Test with None
+        with pytest.raises(ValueError) as exc_info:
+            generate_finance_report(None)
+        
+        assert "tickers must be a non-empty list" in str(exc_info.value)
+    
+    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
+    @patch('builtins.print')
+    def test_generate_finance_report_data_integrity(self, mock_print, mock_ticker, mock_yahoo_data):
+        """Test that data integrity is maintained through the pipeline."""
+        # Setup mock
+        mock_ticker_instance = MagicMock()
+        mock_ticker_instance.history.return_value = mock_yahoo_data
+        mock_ticker.return_value = mock_ticker_instance
+        
+        # Test function
+        result = generate_finance_report(['AAPL'])
+        
+        data = result['AAPL']['data']
+        
+        # Verify all expected columns are present
+        expected_columns = [
+            'Date', 'Close', 'SMA_20', 'SMA_50', 'BB_Middle', 'BB_Upper', 'BB_Lower',
+            'MACD', 'MACD_Signal', 'MACD_Histogram', 'RSI'
+        ]
+        
+        for col in expected_columns:
+            assert col in data.columns, f"Column {col} should be present"
+        
+        # Verify data types
+        assert pd.api.types.is_datetime64_any_dtype(data['Date'])
+        assert pd.api.types.is_numeric_dtype(data['Close'])
+        
+        # Clean up
+        plt.close(result['AAPL']['chart'])
+    
+    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
+    @patch('builtins.print')
+    def test_generate_finance_report_chart_properties(self, mock_print, mock_ticker, mock_yahoo_data):
+        """Test that generated charts have correct properties."""
+        # Setup mock
+        mock_ticker_instance = MagicMock()
+        mock_ticker_instance.history.return_value = mock_yahoo_data
+        mock_ticker.return_value = mock_ticker_instance
+        
+        # Test function
+        result = generate_finance_report(['AAPL'])
+        
+        chart = result['AAPL']['chart']
+        ax = chart.get_axes()[0]
+        
+        # Verify chart properties
+        assert 'AAPL' in ax.get_title()
+        assert ax.get_ylabel() != ''
+        assert ax.get_legend() is not None
+        
+        # Verify chart has data plotted
+        lines = ax.get_lines()
+        assert len(lines) > 0, "Chart should have lines plotted"
+        
+        # Clean up
+        plt.close(chart)
+    
+    @patch('claudetest.pdf_report.finance_pdf_report.load_market_data_from_yahoo')
+    @patch('builtins.print')
+    def test_generate_finance_report_network_error_handling(self, mock_print, mock_load_data):
+        """Test handling of network errors during data loading."""
+        # Setup mock to raise network exception
+        mock_load_data.side_effect = Exception("Network timeout")
+        
+        # Test function should handle error gracefully
+        with pytest.raises(ValueError) as exc_info:
+            generate_finance_report(['AAPL'])
+        
+        assert "Failed to process any tickers" in str(exc_info.value)
+    
+    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
+    @patch('builtins.print')
+    def test_generate_finance_report_progress_reporting(self, mock_print, mock_ticker, mock_yahoo_data):
+        """Test that progress is reported correctly."""
+        # Setup mock
+        mock_ticker_instance = MagicMock()
+        mock_ticker_instance.history.return_value = mock_yahoo_data
+        mock_ticker.return_value = mock_ticker_instance
+        
+        # Test function
+        result = generate_finance_report(['AAPL', 'MSFT'])
+        
+        # Verify print was called for progress updates
+        assert mock_print.called
+        
+        # Check for expected progress messages (approximate verification)
+        print_calls = [call.args[0] for call in mock_print.call_args_list]
+        
+        # Should have processing messages
+        processing_messages = [msg for msg in print_calls if 'Processing' in msg]
+        assert len(processing_messages) >= 2
+        
+        # Should have summary message
+        summary_messages = [msg for msg in print_calls if 'Report Summary' in msg]
+        assert len(summary_messages) >= 1
+        
+        # Clean up
+        for ticker_result in result.values():
+            plt.close(ticker_result['chart'])

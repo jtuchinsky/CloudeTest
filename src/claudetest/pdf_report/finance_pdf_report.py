@@ -169,6 +169,9 @@ def load_market_data_from_yahoo(ticker):
         
         return df
         
+    except ValueError as e:
+        # Re-raise ValueError as-is (from our own validation or yfinance)
+        raise e
     except Exception as e:
         if "No data found" in str(e) or "Invalid ticker" in str(e):
             raise ValueError(f"Invalid ticker symbol '{ticker}' or no data available.")
@@ -176,9 +179,72 @@ def load_market_data_from_yahoo(ticker):
             raise Exception(f"Error fetching data for ticker '{ticker}': {str(e)}")
 
 
-def generate_finance_report():
-    """Generate a financial PDF report."""
-    pass
+def generate_finance_report(tickers):
+    """
+    Generate a comprehensive financial PDF report for multiple tickers.
+    For each ticker, loads market data, computes indicators, and creates price charts.
+    
+    Args:
+        tickers (list): List of ticker symbols (e.g., ['AAPL', 'MSFT', 'GOOGL'])
+        
+    Returns:
+        dict: Dictionary with ticker symbols as keys and matplotlib figures as values
+        
+    Raises:
+        ValueError: If tickers list is empty or contains invalid tickers
+        Exception: If there's an error processing any ticker
+    """
+    if not tickers or not isinstance(tickers, list):
+        raise ValueError("tickers must be a non-empty list of ticker symbols")
+    
+    results = {}
+    failed_tickers = []
+    
+    for ticker in tickers:
+        try:
+            print(f"Processing {ticker}...")
+            
+            # Load market data
+            market_data = load_market_data_from_yahoo(ticker)
+            
+            # Compute technical indicators
+            indicators_data = compute_indicators(market_data)
+            
+            # Create price chart
+            chart_figure = plot_price_chart(ticker, indicators_data)
+            
+            # Store result
+            results[ticker] = {
+                'data': indicators_data,
+                'chart': chart_figure
+            }
+            
+            print(f"✓ Successfully processed {ticker}")
+            
+        except ValueError as e:
+            print(f"✗ Failed to process {ticker}: {str(e)}")
+            failed_tickers.append(ticker)
+            continue
+            
+        except Exception as e:
+            print(f"✗ Error processing {ticker}: {str(e)}")
+            failed_tickers.append(ticker)
+            continue
+    
+    # Check if any tickers were successfully processed
+    if not results:
+        raise ValueError(f"Failed to process any tickers. Failed tickers: {failed_tickers}")
+    
+    # Report summary
+    successful_count = len(results)
+    total_count = len(tickers)
+    print(f"\nReport Summary:")
+    print(f"Successfully processed: {successful_count}/{total_count} tickers")
+    
+    if failed_tickers:
+        print(f"Failed tickers: {failed_tickers}")
+    
+    return results
 
 
 if __name__ == "__main__":
