@@ -1,4 +1,5 @@
-# Add your dependencies here
-# Example:
-# requests==2.31.0
-# flask==2.3.3
+# Financial Analysis CLI Dependencies
+numpy<2.0
+pandas>=2.0.0
+yfinance>=0.2.0
+matplotlib>=3.7.0
