@@ -2,9 +2,12 @@ import pytest
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, mock_open
 from datetime import datetime, timedelta
-from claudetest.pdf_report.finance_pdf_report import compute_indicators, plot_price_chart, load_market_data_from_yahoo, generate_finance_report
+import os
+from matplotlib.backends.backend_pdf import PdfPages
+from claudetest.pdf_report.finance_pdf_report import compute_indicators, plot_price_chart, generate_finance_report, create_cover_page
+from claudetest.pdf_report.market_data_loaders import load_market_data_from_yahoo
 
 
 class TestComputeIndicators:
@@ -365,196 +368,6 @@ class TestPlotPriceChart:
         plt.close(fig)
 
 
-class TestLoadMarketDataFromYahoo:
-    """Test suite for the load_market_data_from_yahoo function."""
-    
-    @pytest.fixture
-    def mock_yahoo_data(self):
-        """Create mock Yahoo Finance data."""
-        dates = pd.date_range('2023-01-01', periods=252, freq='D')  # ~1 year of trading days
-        prices = np.random.uniform(90, 110, len(dates))  # Random prices between 90-110
-        
-        # Create mock history DataFrame with Yahoo Finance structure
-        mock_hist = pd.DataFrame({
-            'Open': prices,
-            'High': prices * 1.02,
-            'Low': prices * 0.98,
-            'Close': prices,
-            'Volume': np.random.randint(1000000, 10000000, len(dates))
-        }, index=dates)
-        mock_hist.index.name = 'Date'
-        
-        return mock_hist
-    
-    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
-    def test_load_market_data_success(self, mock_ticker, mock_yahoo_data):
-        """Test successful data loading from Yahoo Finance."""
-        # Setup mock
-        mock_ticker_instance = MagicMock()
-        mock_ticker_instance.history.return_value = mock_yahoo_data
-        mock_ticker.return_value = mock_ticker_instance
-        
-        # Test function
-        result = load_market_data_from_yahoo('AAPL')
-        
-        # Verify function was called correctly
-        mock_ticker.assert_called_once_with('AAPL')
-        mock_ticker_instance.history.assert_called_once()
-        
-        # Verify result structure
-        assert isinstance(result, pd.DataFrame)
-        assert 'Date' in result.columns
-        assert 'Close' in result.columns
-        assert len(result.columns) == 2
-        
-        # Verify data types
-        assert pd.api.types.is_datetime64_any_dtype(result['Date'])
-        assert pd.api.types.is_numeric_dtype(result['Close'])
-        
-        # Verify data is sorted by date (oldest first)
-        assert result['Date'].is_monotonic_increasing
-    
-    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
-    def test_load_market_data_date_range(self, mock_ticker, mock_yahoo_data):
-        """Test that function requests correct date range (past year)."""
-        # Setup mock
-        mock_ticker_instance = MagicMock()
-        mock_ticker_instance.history.return_value = mock_yahoo_data
-        mock_ticker.return_value = mock_ticker_instance
-        
-        # Capture current time for comparison
-        before_call = datetime.now()
-        
-        # Test function
-        load_market_data_from_yahoo('AAPL')
-        
-        after_call = datetime.now()
-        
-        # Verify history was called with date range
-        call_args = mock_ticker_instance.history.call_args
-        assert 'start' in call_args.kwargs
-        assert 'end' in call_args.kwargs
-        
-        start_date = call_args.kwargs['start']
-        end_date = call_args.kwargs['end']
-        
-        # Verify date range is approximately 1 year
-        date_diff = (end_date - start_date).days
-        assert 360 <= date_diff <= 370  # Allow some flexibility
-        
-        # Verify end date is close to current time
-        assert before_call <= end_date <= after_call + timedelta(seconds=1)
-    
-    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
-    def test_load_market_data_empty_response(self, mock_ticker):
-        """Test handling of empty response from Yahoo Finance."""
-        # Setup mock to return empty DataFrame
-        mock_ticker_instance = MagicMock()
-        mock_ticker_instance.history.return_value = pd.DataFrame()
-        mock_ticker.return_value = mock_ticker_instance
-        
-        # Test function should raise ValueError
-        with pytest.raises(ValueError) as exc_info:
-            load_market_data_from_yahoo('INVALID')
-        
-        assert "No data available for ticker 'INVALID'" in str(exc_info.value)
-    
-    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
-    def test_load_market_data_invalid_ticker(self, mock_ticker):
-        """Test handling of invalid ticker symbols."""
-        # Setup mock to raise exception
-        mock_ticker_instance = MagicMock()
-        mock_ticker_instance.history.side_effect = Exception("No data found, symbol may be delisted")
-        mock_ticker.return_value = mock_ticker_instance
-        
-        # Test function should raise ValueError
-        with pytest.raises(ValueError) as exc_info:
-            load_market_data_from_yahoo('INVALID123')
-        
-        assert "Invalid ticker symbol 'INVALID123'" in str(exc_info.value)
-    
-    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
-    def test_load_market_data_network_error(self, mock_ticker):
-        """Test handling of network/connection errors."""
-        # Setup mock to raise network exception
-        mock_ticker_instance = MagicMock()
-        mock_ticker_instance.history.side_effect = Exception("Connection timeout")
-        mock_ticker.return_value = mock_ticker_instance
-        
-        # Test function should raise general Exception
-        with pytest.raises(Exception) as exc_info:
-            load_market_data_from_yahoo('AAPL')
-        
-        assert "Error fetching data for ticker 'AAPL'" in str(exc_info.value)
-        assert "Connection timeout" in str(exc_info.value)
-    
-    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
-    def test_load_market_data_data_structure(self, mock_ticker, mock_yahoo_data):
-        """Test that returned data has correct structure and content."""
-        # Setup mock
-        mock_ticker_instance = MagicMock()
-        mock_ticker_instance.history.return_value = mock_yahoo_data
-        mock_ticker.return_value = mock_ticker_instance
-        
-        # Test function
-        result = load_market_data_from_yahoo('AAPL')
-        
-        # Verify data structure
-        assert len(result) > 0, "Should return non-empty DataFrame"
-        assert len(result) == len(mock_yahoo_data), "Should return all data points"
-        
-        # Verify Close prices are within reasonable range
-        assert result['Close'].min() > 0, "Close prices should be positive"
-        assert not result['Close'].isna().any(), "Should not have NaN values"
-        
-        # Verify dates are unique and in ascending order
-        assert result['Date'].is_unique, "Dates should be unique"
-        assert result['Date'].is_monotonic_increasing, "Dates should be in ascending order"
-    
-    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
-    def test_load_market_data_ticker_case_handling(self, mock_ticker, mock_yahoo_data):
-        """Test that function handles ticker case correctly."""
-        # Setup mock
-        mock_ticker_instance = MagicMock()
-        mock_ticker_instance.history.return_value = mock_yahoo_data
-        mock_ticker.return_value = mock_ticker_instance
-        
-        # Test with lowercase ticker
-        result = load_market_data_from_yahoo('aapl')
-        
-        # Verify ticker was passed as-is to yfinance (yfinance handles case)
-        mock_ticker.assert_called_once_with('aapl')
-        assert isinstance(result, pd.DataFrame)
-    
-    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
-    def test_load_market_data_integration_with_compute_indicators(self, mock_ticker, mock_yahoo_data):
-        """Test that loaded data works with compute_indicators function."""
-        # Setup mock
-        mock_ticker_instance = MagicMock()
-        mock_ticker_instance.history.return_value = mock_yahoo_data
-        mock_ticker.return_value = mock_ticker_instance
-        
-        # Load data and compute indicators
-        market_data = load_market_data_from_yahoo('AAPL')
-        indicators_data = compute_indicators(market_data)
-        
-        # Verify indicators were computed successfully
-        expected_columns = [
-            'Date', 'Close', 'SMA_20', 'SMA_50', 'BB_Middle', 'BB_Upper', 'BB_Lower',
-            'MACD', 'MACD_Signal', 'MACD_Histogram', 'RSI'
-        ]
-        
-        for col in expected_columns:
-            assert col in indicators_data.columns, f"Column {col} should be present"
-        
-        # Verify original data is preserved
-        pd.testing.assert_series_equal(
-            market_data['Close'], 
-            indicators_data['Close'], 
-            check_names=False
-        )
-
-
 class TestGenerateFinanceReport:
     """Test suite for the generate_finance_report function."""
     
@@ -575,7 +388,7 @@ class TestGenerateFinanceReport:
         
         return mock_hist
     
-    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
+    @patch('claudetest.pdf_report.market_data_loaders.yf.Ticker')
     @patch('builtins.print')  # Mock print to avoid console output during tests
     def test_generate_finance_report_single_ticker_success(self, mock_print, mock_ticker, mock_yahoo_data):
         """Test successful report generation for a single ticker."""
@@ -606,7 +419,7 @@ class TestGenerateFinanceReport:
         # Clean up
         plt.close(chart)
     
-    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
+    @patch('claudetest.pdf_report.market_data_loaders.yf.Ticker')
     @patch('builtins.print')
     def test_generate_finance_report_multiple_tickers_success(self, mock_print, mock_ticker, mock_yahoo_data):
         """Test successful report generation for multiple tickers."""
@@ -630,7 +443,7 @@ class TestGenerateFinanceReport:
             # Clean up charts
             plt.close(result[ticker]['chart'])
     
-    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
+    @patch('claudetest.pdf_report.market_data_loaders.yf.Ticker')
     @patch('builtins.print')
     def test_generate_finance_report_mixed_success_failure(self, mock_print, mock_ticker, mock_yahoo_data):
         """Test report generation with some successful and some failed tickers."""
@@ -656,7 +469,7 @@ class TestGenerateFinanceReport:
         # Clean up
         plt.close(result['AAPL']['chart'])
     
-    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
+    @patch('claudetest.pdf_report.market_data_loaders.yf.Ticker')
     @patch('builtins.print')
     def test_generate_finance_report_all_tickers_fail(self, mock_print, mock_ticker):
         """Test report generation when all tickers fail."""
@@ -692,7 +505,7 @@ class TestGenerateFinanceReport:
         
         assert "tickers must be a non-empty list" in str(exc_info.value)
     
-    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
+    @patch('claudetest.pdf_report.market_data_loaders.yf.Ticker')
     @patch('builtins.print')
     def test_generate_finance_report_data_integrity(self, mock_print, mock_ticker, mock_yahoo_data):
         """Test that data integrity is maintained through the pipeline."""
@@ -722,7 +535,7 @@ class TestGenerateFinanceReport:
         # Clean up
         plt.close(result['AAPL']['chart'])
     
-    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
+    @patch('claudetest.pdf_report.market_data_loaders.yf.Ticker')
     @patch('builtins.print')
     def test_generate_finance_report_chart_properties(self, mock_print, mock_ticker, mock_yahoo_data):
         """Test that generated charts have correct properties."""
@@ -749,7 +562,7 @@ class TestGenerateFinanceReport:
         # Clean up
         plt.close(chart)
     
-    @patch('claudetest.pdf_report.finance_pdf_report.load_market_data_from_yahoo')
+    @patch('claudetest.pdf_report.market_data_loaders.load_market_data_from_yahoo')
     @patch('builtins.print')
     def test_generate_finance_report_network_error_handling(self, mock_print, mock_load_data):
         """Test handling of network errors during data loading."""
@@ -762,7 +575,7 @@ class TestGenerateFinanceReport:
         
         assert "Failed to process any tickers" in str(exc_info.value)
     
-    @patch('claudetest.pdf_report.finance_pdf_report.yf.Ticker')
+    @patch('claudetest.pdf_report.market_data_loaders.yf.Ticker')
     @patch('builtins.print')
     def test_generate_finance_report_progress_reporting(self, mock_print, mock_ticker, mock_yahoo_data):
         """Test that progress is reported correctly."""
@@ -791,3 +604,280 @@ class TestGenerateFinanceReport:
         # Clean up
         for ticker_result in result.values():
             plt.close(ticker_result['chart'])
+
+
+class TestCreateCoverPage:
+    """Test suite for the create_cover_page function."""
+    
+    @patch('matplotlib.pyplot.savefig')
+    @patch('matplotlib.pyplot.close')
+    def test_create_cover_page_basic_functionality(self, mock_close, mock_savefig):
+        """Test that create_cover_page creates and saves a figure."""
+        # Create a mock PDF object
+        mock_pdf = MagicMock()
+        
+        # Test function
+        create_cover_page(mock_pdf)
+        
+        # Verify that savefig was called on the PDF object
+        assert mock_pdf.savefig.called
+        
+        # Verify that close was called
+        assert mock_close.called
+    
+    @patch('matplotlib.pyplot.text')
+    @patch('matplotlib.pyplot.axis')
+    @patch('matplotlib.pyplot.figure')
+    def test_create_cover_page_content(self, mock_figure, mock_axis, mock_text):
+        """Test that create_cover_page creates proper content."""
+        # Setup mock figure
+        mock_fig = MagicMock()
+        mock_figure.return_value = mock_fig
+        
+        # Create a mock PDF object
+        mock_pdf = MagicMock()
+        
+        # Test function
+        create_cover_page(mock_pdf)
+        
+        # Verify figure was created with correct size
+        mock_figure.assert_called_once_with(figsize=(11.69, 8.27))
+        
+        # Verify axis was turned off
+        mock_axis.assert_called_once_with('off')
+        
+        # Verify text elements were added
+        assert mock_text.call_count >= 4  # Should have at least 4 text elements
+        
+        # Check for expected text content in calls
+        text_calls = [call.args for call in mock_text.call_args_list]
+        
+        # Should contain main title
+        title_found = any("Financial Analysis Report" in str(call) for call in text_calls)
+        assert title_found, "Should contain main title"
+
+
+class TestGenerateFinanceReportPDF:
+    """Updated test suite for the PDF-generating generate_finance_report function."""
+    
+    @pytest.fixture
+    def mock_yahoo_data(self):
+        """Create mock Yahoo Finance data."""
+        dates = pd.date_range('2023-01-01', periods=100, freq='D')
+        prices = np.random.uniform(90, 110, len(dates))
+        
+        mock_hist = pd.DataFrame({
+            'Open': prices,
+            'High': prices * 1.02,
+            'Low': prices * 0.98,
+            'Close': prices,
+            'Volume': np.random.randint(1000000, 10000000, len(dates))
+        }, index=dates)
+        mock_hist.index.name = 'Date'
+        
+        return mock_hist
+    
+    @patch('claudetest.pdf_report.finance_pdf_report.PdfPages')
+    @patch('claudetest.pdf_report.market_data_loaders.yf.Ticker')
+    @patch('builtins.print')
+    def test_generate_finance_report_pdf_creation(self, mock_print, mock_ticker, mock_pdf_pages, mock_yahoo_data):
+        """Test that generate_finance_report creates a PDF file."""
+        # Setup mocks
+        mock_ticker_instance = MagicMock()
+        mock_ticker_instance.history.return_value = mock_yahoo_data
+        mock_ticker.return_value = mock_ticker_instance
+        
+        mock_pdf_context = MagicMock()
+        mock_pdf_pages.return_value.__enter__.return_value = mock_pdf_context
+        
+        # Test function
+        result = generate_finance_report(['AAPL'])
+        
+        # Verify PDF creation
+        mock_pdf_pages.assert_called_once_with("financial_report.pdf")
+        
+        # Verify result is PDF filename
+        assert result == "financial_report.pdf"
+    
+    @patch('claudetest.pdf_report.finance_pdf_report.create_cover_page')
+    @patch('claudetest.pdf_report.finance_pdf_report.PdfPages')
+    @patch('claudetest.pdf_report.market_data_loaders.yf.Ticker')
+    @patch('builtins.print')
+    def test_generate_finance_report_cover_page_called(self, mock_print, mock_ticker, mock_pdf_pages, mock_create_cover):
+        """Test that cover page is created."""
+        # Setup mocks
+        mock_ticker_instance = MagicMock()
+        mock_ticker_instance.history.return_value = self.mock_yahoo_data()
+        mock_ticker.return_value = mock_ticker_instance
+        
+        mock_pdf_context = MagicMock()
+        mock_pdf_pages.return_value.__enter__.return_value = mock_pdf_context
+        
+        # Test function
+        generate_finance_report(['AAPL'])
+        
+        # Verify cover page was created
+        mock_create_cover.assert_called_once_with(mock_pdf_context)
+    
+    @patch('claudetest.pdf_report.finance_pdf_report.plot_price_chart')
+    @patch('claudetest.pdf_report.finance_pdf_report.PdfPages')
+    @patch('claudetest.pdf_report.market_data_loaders.yf.Ticker')
+    @patch('builtins.print')
+    def test_generate_finance_report_charts_added_to_pdf(self, mock_print, mock_ticker, mock_pdf_pages, mock_plot_chart):
+        """Test that charts are created and added to PDF."""
+        # Setup mocks
+        mock_ticker_instance = MagicMock()
+        mock_ticker_instance.history.return_value = self.mock_yahoo_data()
+        mock_ticker.return_value = mock_ticker_instance
+        
+        mock_pdf_context = MagicMock()
+        mock_pdf_pages.return_value.__enter__.return_value = mock_pdf_context
+        
+        mock_figure = MagicMock()
+        mock_plot_chart.return_value = mock_figure
+        
+        # Test function
+        generate_finance_report(['AAPL', 'MSFT'])
+        
+        # Verify charts were created for each ticker
+        assert mock_plot_chart.call_count == 2
+        
+        # Verify charts were saved to PDF
+        assert mock_pdf_context.savefig.call_count == 2
+    
+    @patch('matplotlib.pyplot.close')
+    @patch('claudetest.pdf_report.finance_pdf_report.plot_price_chart')
+    @patch('claudetest.pdf_report.finance_pdf_report.PdfPages')
+    @patch('claudetest.pdf_report.market_data_loaders.yf.Ticker')
+    @patch('builtins.print')
+    def test_generate_finance_report_figures_cleaned_up(self, mock_print, mock_ticker, mock_pdf_pages, mock_plot_chart, mock_close):
+        """Test that matplotlib figures are properly closed."""
+        # Setup mocks
+        mock_ticker_instance = MagicMock()
+        mock_ticker_instance.history.return_value = self.mock_yahoo_data()
+        mock_ticker.return_value = mock_ticker_instance
+        
+        mock_pdf_context = MagicMock()
+        mock_pdf_pages.return_value.__enter__.return_value = mock_pdf_context
+        
+        mock_figure = MagicMock()
+        mock_plot_chart.return_value = mock_figure
+        
+        # Test function
+        generate_finance_report(['AAPL'])
+        
+        # Verify figure was closed
+        mock_close.assert_called_with(mock_figure)
+    
+    @patch('claudetest.pdf_report.finance_pdf_report.PdfPages')
+    @patch('claudetest.pdf_report.market_data_loaders.yf.Ticker')
+    @patch('builtins.print')
+    def test_generate_finance_report_mixed_success_failure_pdf(self, mock_print, mock_ticker, mock_pdf_pages):
+        """Test PDF generation with some failed tickers."""
+        # Setup mock to succeed for AAPL but fail for INVALID
+        def mock_ticker_side_effect(ticker):
+            mock_instance = MagicMock()
+            if ticker == 'AAPL':
+                mock_instance.history.return_value = self.mock_yahoo_data()
+            else:
+                mock_instance.history.return_value = pd.DataFrame()  # Empty response
+            return mock_instance
+        
+        mock_ticker.side_effect = mock_ticker_side_effect
+        
+        mock_pdf_context = MagicMock()
+        mock_pdf_pages.return_value.__enter__.return_value = mock_pdf_context
+        
+        # Test function
+        result = generate_finance_report(['AAPL', 'INVALID'])
+        
+        # Verify PDF was still created for successful ticker
+        assert result == "financial_report.pdf"
+        
+        # Verify PDF creation was attempted
+        mock_pdf_pages.assert_called_once_with("financial_report.pdf")
+    
+    @patch('claudetest.pdf_report.finance_pdf_report.PdfPages')
+    @patch('claudetest.pdf_report.market_data_loaders.yf.Ticker')
+    @patch('builtins.print')
+    def test_generate_finance_report_all_tickers_fail_no_pdf(self, mock_print, mock_ticker, mock_pdf_pages):
+        """Test that no PDF is created when all tickers fail."""
+        # Setup mock to always return empty DataFrame
+        mock_ticker_instance = MagicMock()
+        mock_ticker_instance.history.return_value = pd.DataFrame()
+        mock_ticker.return_value = mock_ticker_instance
+        
+        # Test function should raise ValueError
+        with pytest.raises(ValueError) as exc_info:
+            generate_finance_report(['INVALID1', 'INVALID2'])
+        
+        assert "Failed to process any tickers" in str(exc_info.value)
+        
+        # Verify PDF creation was not attempted
+        mock_pdf_pages.assert_not_called()
+    
+    @patch('claudetest.pdf_report.finance_pdf_report.PdfPages')
+    @patch('builtins.print')
+    def test_generate_finance_report_empty_ticker_list_no_pdf(self, mock_print, mock_pdf_pages):
+        """Test that no PDF is created with empty ticker list."""
+        with pytest.raises(ValueError) as exc_info:
+            generate_finance_report([])
+        
+        assert "tickers must be a non-empty list" in str(exc_info.value)
+        
+        # Verify PDF creation was not attempted
+        mock_pdf_pages.assert_not_called()
+    
+    @patch('claudetest.pdf_report.finance_pdf_report.PdfPages')
+    @patch('claudetest.pdf_report.market_data_loaders.yf.Ticker')
+    @patch('builtins.print')
+    def test_generate_finance_report_return_value(self, mock_print, mock_ticker, mock_pdf_pages):
+        """Test that function returns correct PDF filename."""
+        # Setup mocks
+        mock_ticker_instance = MagicMock()
+        mock_ticker_instance.history.return_value = self.mock_yahoo_data()
+        mock_ticker.return_value = mock_ticker_instance
+        
+        mock_pdf_context = MagicMock()
+        mock_pdf_pages.return_value.__enter__.return_value = mock_pdf_context
+        
+        # Test function
+        result = generate_finance_report(['AAPL'])
+        
+        # Verify correct return value
+        assert result == "financial_report.pdf"
+        assert isinstance(result, str)
+    
+    @patch('claudetest.pdf_report.finance_pdf_report.PdfPages')
+    @patch('claudetest.pdf_report.market_data_loaders.yf.Ticker')
+    @patch('builtins.print')
+    def test_generate_finance_report_progress_messages(self, mock_print, mock_ticker, mock_pdf_pages):
+        """Test that appropriate progress messages are printed."""
+        # Setup mocks
+        mock_ticker_instance = MagicMock()
+        mock_ticker_instance.history.return_value = self.mock_yahoo_data()
+        mock_ticker.return_value = mock_ticker_instance
+        
+        mock_pdf_context = MagicMock()
+        mock_pdf_pages.return_value.__enter__.return_value = mock_pdf_context
+        
+        # Test function
+        generate_finance_report(['AAPL'])
+        
+        # Verify progress messages were printed
+        assert mock_print.called
+        
+        # Check for expected messages
+        print_calls = [call.args[0] for call in mock_print.call_args_list]
+        
+        # Should have data loading message
+        loading_messages = [msg for msg in print_calls if 'Loading market data' in msg]
+        assert len(loading_messages) >= 1
+        
+        # Should have PDF generation message
+        pdf_messages = [msg for msg in print_calls if 'Generating PDF report' in msg]
+        assert len(pdf_messages) >= 1
+        
+        # Should have chart addition message
+        chart_messages = [msg for msg in print_calls if 'Adding chart' in msg]
+        assert len(chart_messages) >= 1

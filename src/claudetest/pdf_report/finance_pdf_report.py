@@ -7,8 +7,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from datetime import datetime, timedelta
-import yfinance as yf
-
+from matplotlib.backends.backend_pdf import PdfPages
+from .market_data_loaders import load_market_data_from_yahoo
 
 def compute_indicators(df):
     """
@@ -129,66 +129,17 @@ def plot_price_chart(ticker, df, figsize=(12, 8)):
     
     return fig
 
-
-def load_market_data_from_yahoo(ticker):
-    """
-    Loads market data from Yahoo Finance for the given ticker.
-    Returns DataFrame with daily close prices for the past year from today.
-    
-    Args:
-        ticker (str): Stock ticker symbol (e.g., 'AAPL', 'MSFT')
-        
-    Returns:
-        pd.DataFrame: DataFrame with Date and Close columns for the past year
-        
-    Raises:
-        ValueError: If ticker is invalid or no data is available
-        Exception: If there's an error fetching data from Yahoo Finance
-    """
-    try:
-        # Calculate date range (past year from today)
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=365)
-        
-        # Create ticker object and fetch data
-        stock = yf.Ticker(ticker)
-        hist = stock.history(start=start_date, end=end_date)
-        
-        # Check if data was returned
-        if hist.empty:
-            raise ValueError(f"No data available for ticker '{ticker}'. Please check if the ticker symbol is valid.")
-        
-        # Reset index to make Date a column and select only Close price
-        df = hist.reset_index()[['Date', 'Close']]
-        
-        # Ensure Date column is datetime
-        df['Date'] = pd.to_datetime(df['Date'])
-        
-        # Sort by date (oldest first)
-        df = df.sort_values('Date').reset_index(drop=True)
-        
-        return df
-        
-    except ValueError as e:
-        # Re-raise ValueError as-is (from our own validation or yfinance)
-        raise e
-    except Exception as e:
-        if "No data found" in str(e) or "Invalid ticker" in str(e):
-            raise ValueError(f"Invalid ticker symbol '{ticker}' or no data available.")
-        else:
-            raise Exception(f"Error fetching data for ticker '{ticker}': {str(e)}")
-
-
 def generate_finance_report(tickers):
     """
     Generate a comprehensive financial PDF report for multiple tickers.
     For each ticker, loads market data, computes indicators, and creates price charts.
+    Saves everything to a PDF file.
     
     Args:
         tickers (list): List of ticker symbols (e.g., ['AAPL', 'MSFT', 'GOOGL'])
         
     Returns:
-        dict: Dictionary with ticker symbols as keys and matplotlib figures as values
+        str: Path to the generated PDF file
         
     Raises:
         ValueError: If tickers list is empty or contains invalid tickers
@@ -197,12 +148,16 @@ def generate_finance_report(tickers):
     if not tickers or not isinstance(tickers, list):
         raise ValueError("tickers must be a non-empty list of ticker symbols")
     
+    # Assign PDF filename
+    pdf_filename = "financial_report.pdf"
+    
     results = {}
     failed_tickers = []
     
+    # Load market data for each ticker
     for ticker in tickers:
         try:
-            print(f"Processing {ticker}...")
+            print(f"Loading market data for {ticker}...")
             
             # Load market data
             market_data = load_market_data_from_yahoo(ticker)
@@ -210,24 +165,18 @@ def generate_finance_report(tickers):
             # Compute technical indicators
             indicators_data = compute_indicators(market_data)
             
-            # Create price chart
-            chart_figure = plot_price_chart(ticker, indicators_data)
+            # Store result (we'll create charts when saving to PDF)
+            results[ticker] = indicators_data
             
-            # Store result
-            results[ticker] = {
-                'data': indicators_data,
-                'chart': chart_figure
-            }
-            
-            print(f"✓ Successfully processed {ticker}")
+            print(f"✓ Successfully loaded data for {ticker}")
             
         except ValueError as e:
-            print(f"✗ Failed to process {ticker}: {str(e)}")
+            print(f"✗ Failed to load data for {ticker}: {str(e)}")
             failed_tickers.append(ticker)
             continue
             
         except Exception as e:
-            print(f"✗ Error processing {ticker}: {str(e)}")
+            print(f"✗ Error loading data for {ticker}: {str(e)}")
             failed_tickers.append(ticker)
             continue
     
@@ -235,16 +184,44 @@ def generate_finance_report(tickers):
     if not results:
         raise ValueError(f"Failed to process any tickers. Failed tickers: {failed_tickers}")
     
+    # Create PDF report
+    print(f"\nGenerating PDF report: {pdf_filename}")
+    
+    with PdfPages(pdf_filename) as pdf:
+        # Create cover page
+        create_cover_page(pdf)
+        
+        # Create charts for each ticker and add to PDF
+        for ticker, data in results.items():
+            print(f"Adding chart for {ticker} to PDF...")
+            chart_figure = plot_price_chart(ticker, data)
+            pdf.savefig(chart_figure)
+            plt.close(chart_figure)  # Clean up figure
+    
     # Report summary
     successful_count = len(results)
     total_count = len(tickers)
     print(f"\nReport Summary:")
     print(f"Successfully processed: {successful_count}/{total_count} tickers")
+    print(f"PDF report saved as: {pdf_filename}")
     
     if failed_tickers:
         print(f"Failed tickers: {failed_tickers}")
     
-    return results
+    return pdf_filename
+
+def create_cover_page(pdf):
+    """
+    Creates and saves a cover page into the PDF report.
+    """
+    fig = plt.figure(figsize=(11.69, 8.27))
+    plt.axis('off')
+    plt.text(0.5, 0.7, "Financial Analysis Report", fontsize=24, ha='center')
+    plt.text(0.5, 0.62, "Analysis of 5 Stocks from Yahoo Finance", fontsize=16, ha='center')
+    plt.text(0.5, 0.5, "Includes Technical Indicators: SMA, Bollinger Bands, MACD, RSI", fontsize=12, ha='center')
+    plt.text(0.5, 0.4, "Generated with Python and matplotlib", fontsize=10, ha='center')
+    pdf.savefig(fig)
+    plt.close(fig)
 
 
 if __name__ == "__main__":
